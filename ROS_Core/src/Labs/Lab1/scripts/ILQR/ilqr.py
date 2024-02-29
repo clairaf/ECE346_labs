@@ -130,6 +130,90 @@ class ILQR():
 		obs_refs = self.collision_checker.check_collisions(trajectory, self.obstacle_list)
 		return path_refs, obs_refs
 
+	def backward_pass(self, trajectory, controls, path_refs, obs_refs, alpha, b, lam):
+		""" Computes the Backwards pass for iLQR
+		
+		Parameters
+		----------
+		Returns
+		-------
+		"""
+
+		# Compute QT around xT
+		q, r, Q, R, H = self.cost.get_derivatives_np(trajectory, controls, path_refs, obs_refs)
+		A, B = self.dyn.get_jacobian_np(trajectory, controls)
+		p = q[:, self.T]
+		P = Q[:, self.T]
+		t = self.T - 1
+		while t >= 0:
+			qt = q[:, t]
+			rt = r[:, t]
+			Qt = Q[:, t]
+			Rt = R[:, t]
+			Ht = H[:, t]
+			At = A[:, t]
+			Bt = B[:, t]
+
+			# step 6: compute gradient and Hessian of the Q function
+			Qxt = qt + At.transpose()@p # pt+1 is a placeholder
+			Qut = rt + Bt.transpose()@p
+			Qxxt = Qt + At.transpose()@P@At
+			Quut = Rt + Bt.transpose()@P@Bt
+			Quxt = Ht + Bt.transpose()@P@At
+
+			# step 7: compute regularized Hessian of the Q-function
+			Quu_reg = Rt + Bt.transpose()@(P + lam@np.identity(P.shape[0]))@Bt
+			Qux_reg = Ht +Bt.transpose()@(P + lam@np.identity(P.shape[0]))@At
+
+			# step 8: update lam
+			if np.all(np.linalg.eigvals(Quu_reg) >0) : 
+				lam = alpha*lam
+				t = self.T - 1
+				continue
+
+			# calc closed loop and open loop gain
+			Kt = -np.linalg.inv(Quu_reg)@Qux_reg
+			kt = -np.linalg.inv(Qux_reg)@Qut
+
+			# compute derivative and hessian of Vt
+			p = Qxt + Kt.transpose()@Qut + Kt.transpose()@Quut@kt + Quxt.transpose()@kt
+			P = Qxxt + Kt.tranpose()@Quut@Kt + Kt.transpose()@Quxt + Quxt.transpose()@Kt
+
+			t = t-1
+
+		return Kt, kt, b*lam
+
+
+	def forward_pass(self, state, trajectory, controls, J, Kt, kt, alpha, epsilon):
+		"""
+		Computes the forward pass for the iLQR
+
+		Parameters
+		----------
+		Returns
+		------
+		"""
+		trajectory_new =trajectory
+		controls_new = controls
+		rho = 0.1 # define this frfr
+
+		# are we supposed to line search alpha?
+		while alpha > rho:
+			for t in range(0, len(self.T)):
+				ut = controls[:, t] + Kt*(state - trajectory[:, t]) + alpha * kt # check that we knwo what x and x_bar are
+				state_next, _ = self.dyn.integrate_forward_np(state, ut)
+				controls_new[:, t] = ut
+				trajectory_new[: t+1] = state_next
+
+			# compute new cost
+			path_refs, obs_refs = self.get_references(trajectory_new)
+			J_new = self.cost.get_traj_cost(trajectory_new, controls_new, path_refs, obs_refs)
+			if J_new < J: break
+			else: alpha = epsilon * alpha
+
+
+		return controls_new, trajectory_new
+	
 	def plan(self, init_state: np.ndarray,
 				controls: Optional[np.ndarray] = None) -> Dict:
 		'''
@@ -175,6 +259,13 @@ class ILQR():
 		# TODO 1: Implement the ILQR algorithm. Feel free to add any helper functions.
 		# You will find following implemented functions useful:
 
+		# TODO: Initialize Regularization (lambda)
+		T = controls.shape[1]
+		lam = self.reg_init
+		while J<self.tol and J>-self.tol:
+			# do backward pass , return Kt, kt, Lambda
+			Kt, kt, lam = self.backward_pass(trajectory, controls, path_refs, obs_refs, alpha, lam)
+			trajectory, controls = self.forward_pass(state, trajectory, controls, J, Kt, kt, alpha, epsilon)
 		# ******** Functions to compute the Jacobians of the dynamics  ************
 		# A, B = self.dyn.get_jacobian_np(trajectory, controls)
 
@@ -243,6 +334,3 @@ class ILQR():
 				# Optional TODO: Fill in other information you want to return
 		)
 		return solver_info
-
-
-
