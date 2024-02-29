@@ -215,9 +215,9 @@ class TrajectoryPlanner():
         ###############################
         # Implement your control law here using ILQR policy
         # Hint: make sure that the difference in heading is between [-pi, pi]
-        
-        accel = 0 # TO BE REPLACED
-        steer_rate = 0 # TO BE REPLACED
+        u = u_ref + K_closed_loop@(x - x_ref)
+        accel = u[0]
+        steer_rate = u[1]
 
         ##### END OF TODO ##############
 
@@ -449,6 +449,25 @@ class TrajectoryPlanner():
                 - Publish the new policy for RVIZ visualization
                     for example: self.trajectory_pub.publish(new_policy.to_msg())       
             '''
+
+            # Step 1: Check if we need to replan
+            if self.plan_state_buffer.new_data_available and t_last_replan > self.replan_dt and self.planner_ready:
+                current_state = self.plan_state_buffer.readFromRT() # this returns an object from which we probably need to reference to get the current state
+                prev_policy = self.policy_buffer.readFromRT()
+                if prev_policy: # thsi is in step 2, not sure if prevoiou policy can be none?
+                    initial_controls = prev_policy.get_ref_controls()
+                if self.path_buffer.new_data_available:
+                    # Update the reference path in the iLQR
+                    # how do i get the new path?
+                    new_path = self.path_buffer.readFromRT()
+                    self.planner.update_ref_path(new_path)
+
+                    #REPLAN using ILQR ?? Not sure if this is right or how to set the ILQR
+                    ilqr = ILQR(new_path)
+
+                # check if replan is successful and impliment step 3
+
+
             ###############################
             #### END OF TODO #############
             ###############################

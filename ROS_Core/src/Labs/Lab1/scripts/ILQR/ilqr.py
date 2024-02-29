@@ -184,7 +184,7 @@ class ILQR():
 		return Kt, kt, b*lam
 
 
-	def forward_pass(self, state, trajectory, controls, J, Kt, kt, alpha, epsilon):
+	def forward_pass(self, state, trajectory, controls, J, K, k, alpha, epsilon):
 		"""
 		Computes the forward pass for the iLQR
 
@@ -193,15 +193,16 @@ class ILQR():
 		Returns
 		------
 		"""
-		trajectory_new =trajectory
-		controls_new = controls
+		trajectory_new = np.zeros_like(trajectory)
+		controls_new = np.zeros_like(controls)
 		rho = 0.1 # define this frfr
 
+		trajectory_new[:, 0] = trajectory[: 0]
 		# are we supposed to line search alpha?
 		while alpha > rho:
-			for t in range(0, len(self.T)):
-				ut = controls[:, t] + Kt*(state - trajectory[:, t]) + alpha * kt # check that we knwo what x and x_bar are
-				state_next, _ = self.dyn.integrate_forward_np(state, ut)
+			for t in range(self.T-1):
+				ut = controls[:, t] + K[:, :, t]@(trajectory_new[:, t] - trajectory[:, t]) + alpha * k[:, t] # check that we knwo what x and x_bar are
+				state_next, _ = self.dyn.integrate_forward_np(trajectory_new[:, t], ut)
 				controls_new[:, t] = ut
 				trajectory_new[: t+1] = state_next
 
@@ -266,6 +267,7 @@ class ILQR():
 			# do backward pass , return Kt, kt, Lambda
 			Kt, kt, lam = self.backward_pass(trajectory, controls, path_refs, obs_refs, alpha, lam)
 			trajectory, controls = self.forward_pass(state, trajectory, controls, J, Kt, kt, alpha, epsilon)
+
 		# ******** Functions to compute the Jacobians of the dynamics  ************
 		# A, B = self.dyn.get_jacobian_np(trajectory, controls)
 
