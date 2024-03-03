@@ -207,7 +207,6 @@ class ILQR():
 		rho = 0.1 # define this frfr
 
 		trajectory_new[:, 0] = trajectory[:, 0]
-		
 		# are we supposed to line search alpha?
 		while alpha > rho:
 			for t in range(self.T-1):
@@ -279,13 +278,25 @@ class ILQR():
 		print("J", J)
 		print(self.tol)
 		print(lam)
-		while J>self.tol:
+		converged = False
+		while not converged:
 			# do backward pass , return Kt, kt, Lambda
 			K, k, lam = self.backward_pass(trajectory, controls, path_refs, obs_refs, alpha, b, lam)
-			trajectory, controls = self.forward_pass(trajectory, controls, J, K, k, alpha, epsilon)
-			#path_refs, obs_refs = self.get_references(trajectory)
-			J = self.cost.get_traj_cost(trajectory, controls, path_refs, obs_refs)
-			print(J)
+			trajectory_new, controls_new = self.forward_pass(trajectory, controls, J, K, k, alpha, epsilon)
+			path_refs, obs_refs = self.get_references(trajectory_new)
+			J_new = self.cost.get_traj_cost(trajectory_new, controls_new, path_refs, obs_refs)
+			if J_new <= J:
+				print("J new", J_new)
+				if np.abs(J-J_new) < self.tol:
+					converged = True
+				J = J_new
+				trajectory = trajectory_new
+				controls = controls_new
+
+
+			if converged:
+				print(f"converged at {J} cost")
+
 
 		# ******** Functions to compute the Jacobians of the dynamics  ************
 		# A, B = self.dyn.get_jacobian_np(trajectory, controls)
