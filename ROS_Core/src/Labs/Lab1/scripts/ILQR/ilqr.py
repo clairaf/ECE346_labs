@@ -142,17 +142,21 @@ class ILQR():
 		# Compute QT around xT
 		q, r, Q, R, H = self.cost.get_derivatives_np(trajectory, controls, path_refs, obs_refs)
 		A, B = self.dyn.get_jacobian_np(trajectory, controls)
+		k_open_loop = np.zeros((2, self.T))
+		K_closed_loop = np.zeros((2, 4, self.T))
+
 		p = q[:, self.T]
-		P = Q[:, self.T]
+		P = Q[:, :, self.T]
 		t = self.T - 1
+
 		while t >= 0:
 			qt = q[:, t]
 			rt = r[:, t]
-			Qt = Q[:, t]
-			Rt = R[:, t]
-			Ht = H[:, t]
-			At = A[:, t]
-			Bt = B[:, t]
+			Qt = Q[:, :, t]
+			Rt = R[:, :, t]
+			Ht = H[:, :, t]
+			At = A[:, :, t]
+			Bt = B[:, :, t]
 
 			# step 6: compute gradient and Hessian of the Q function
 			Qxt = qt + At.transpose()@p # pt+1 is a placeholder
@@ -174,6 +178,8 @@ class ILQR():
 			# calc closed loop and open loop gain
 			Kt = -np.linalg.inv(Quu_reg)@Qux_reg
 			kt = -np.linalg.inv(Qux_reg)@Qut
+			k_open_loop[:, t] = kt
+			K_closed_loop[:, :, t] = Kt
 
 			# compute derivative and hessian of Vt
 			p = Qxt + Kt.transpose()@Qut + Kt.transpose()@Quut@kt + Quxt.transpose()@kt
@@ -184,7 +190,7 @@ class ILQR():
 		return Kt, kt, b*lam
 
 
-	def forward_pass(self, state, trajectory, controls, J, K, k, alpha, epsilon):
+	def forward_pass(self, trajectory, controls, J, K, k, alpha, epsilon):
 		"""
 		Computes the forward pass for the iLQR
 
@@ -265,8 +271,8 @@ class ILQR():
 		lam = self.reg_init
 		while J<self.tol and J>-self.tol:
 			# do backward pass , return Kt, kt, Lambda
-			Kt, kt, lam = self.backward_pass(trajectory, controls, path_refs, obs_refs, alpha, lam)
-			trajectory, controls = self.forward_pass(state, trajectory, controls, J, Kt, kt, alpha, epsilon)
+			K, k, lam = self.backward_pass(trajectory, controls, path_refs, obs_refs, alpha, lam)
+			trajectory, controls = self.forward_pass(trajectory, controls, J, K, k, alpha, epsilon)
 
 		# ******** Functions to compute the Jacobians of the dynamics  ************
 		# A, B = self.dyn.get_jacobian_np(trajectory, controls)
