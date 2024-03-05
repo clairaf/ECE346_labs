@@ -130,7 +130,7 @@ class ILQR():
 		obs_refs = self.collision_checker.check_collisions(trajectory, self.obstacle_list)
 		return path_refs, obs_refs
 
-	def backward_pass(self, trajectory, controls, path_refs, obs_refs, alpha, b, lam):
+	def backward_pass(self, trajectory, controls, path_refs, obs_refs, lam):
 		""" Computes the Backwards pass for iLQR
 		
 		Parameters
@@ -148,6 +148,7 @@ class ILQR():
 		p = q[:, self.T-1]
 		P = Q[:, :, self.T-1]
 		t = self.T - 1
+		num_attemps = 0
 
 		while t >= 0:
 			qt = q[:, t]
@@ -171,9 +172,13 @@ class ILQR():
 			Qux_reg = Ht +Bt.transpose()@(P + reg_matrix)@At
 
 			# step 8: update lam
-			if not np.all(np.linalg.eigvals(Quu_reg) > 0) : 
-				lam = alpha*lam
+			# maybe the max attempt goes here and we grab the minimum? bc max attempt is a regularization param
+			if not np.all(np.linalg.eigvals(Quu_reg) > 0) and num_attemps < self.max_attempt: 
+				lam = min(self.reg_max, self.reg_scale_up * lam)
 				t = self.T - 1
+				p = q[:, self.T-1]
+				P = Q[:, :, self.T-1]
+				num_attemps += 1
 				continue
 
 			# calc closed loop and open loop gain
@@ -189,11 +194,12 @@ class ILQR():
 			P = Qxxt + Kt.transpose()@Quut@Kt + Kt.transpose()@Quxt + Quxt.transpose()@Kt
 
 			t = t-1
+		
+		lam = max(self.reg_min, lam*self.reg_scale_down)
+		return K_closed_loop, k_open_loop, lam
 
-		return K_closed_loop, k_open_loop, b*lam
 
-
-	def forward_pass(self, trajectory, controls, J, K, k, alpha, epsilon):
+	def forward_pass(self, trajectory, controls, J, K, k, alpha):
 		"""
 		Computes the forward pass for the iLQR
 
@@ -204,23 +210,15 @@ class ILQR():
 		"""
 		trajectory_new = np.zeros_like(trajectory)
 		controls_new = np.zeros_like(controls)
-		rho = 0.1 # define this frfr
 
 		trajectory_new[:, 0] = trajectory[:, 0]
-		# are we supposed to line search alpha?
-		while alpha > rho:
-			for t in range(self.T-1):
-				ut = controls[:, t] + K[:, :, t]@(trajectory_new[:, t] - trajectory[:, t]) + alpha * k[:, t] # check that we knwo what x and x_bar are
-				state_next, _ = self.dyn.integrate_forward_np(trajectory_new[:, t], ut)
-				controls_new[:, t] = ut
-				trajectory_new[:, t+1] = state_next
-
-			# compute new cost
-			path_refs, obs_refs = self.get_references(trajectory_new)
-			J_new = self.cost.get_traj_cost(trajectory_new, controls_new, path_refs, obs_refs)
-			if J_new < J: break
-			else: alpha = epsilon * alpha
-
+		
+		# roll out the new trajectory and controls
+		for t in range(self.T-1):
+			ut = controls[:, t] + K[:, :, t]@(trajectory_new[:, t] - trajectory[:, t]) + alpha * k[:, t]
+			state_next, _ = self.dyn.integrate_forward_np(trajectory_new[:, t], ut)
+			controls_new[:, t] = ut
+			trajectory_new[:, t+1] = state_next
 
 		return trajectory_new, controls_new
 	
@@ -269,34 +267,35 @@ class ILQR():
 		# TODO 1: Implement the ILQR algorithm. Feel free to add any helper functions.
 		# You will find following implemented functions useful:
 
-		# TODO: Initialize Regularization (lambda)
-		T = controls.shape[1]
+		T = self.T
 		lam = self.reg_init
-		alpha = 0.4
-		epsilon = 0.1
-		b = 0.1
-		print("J", J)
-		print(self.tol)
-		print(lam)
 		converged = False
-		while not converged:
+		
+		for i in range(self.max_iter):
 			# do backward pass , return Kt, kt, Lambda
-			K, k, lam = self.backward_pass(trajectory, controls, path_refs, obs_refs, alpha, b, lam)
-			trajectory_new, controls_new = self.forward_pass(trajectory, controls, J, K, k, alpha, epsilon)
-			path_refs, obs_refs = self.get_references(trajectory_new)
-			J_new = self.cost.get_traj_cost(trajectory_new, controls_new, path_refs, obs_refs)
-			if J_new <= J:
-				print("J new", J_new)
-				if np.abs(J-J_new) < self.tol:
-					converged = True
-				J = J_new
-				trajectory = trajectory_new
-				controls = controls_new
-
-
+			K, k, lam = self.backward_pass(trajectory, controls, path_refs, obs_refs, lam)
+			
+			changed = False
+			# start the forward pass by line searching through alpha
+			for alpha in self.alphas:
+				trajectory_new, controls_new = self.forward_pass(trajectory, controls, J, K, k, alpha)
+				path_refs, obs_refs = self.get_references(trajectory_new)
+				J_new = self.cost.get_traj_cost(trajectory_new, controls_new, path_refs, obs_refs)
+				if J_new <= J:
+					if np.abs(J-J_new) < self.tol:
+						converged = True
+					J = J_new
+					trajectory = trajectory_new
+					controls = controls_new
+					changed = True
+					break
+				
+			if not changed:
+				print(f"Line search failed with reg = {lam} at step {i}")
+				break
 			if converged:
-				print(f"converged at {J} cost")
-
+				print(f"Converged after {i} steps.")
+				break
 
 		# ******** Functions to compute the Jacobians of the dynamics  ************
 		# A, B = self.dyn.get_jacobian_np(trajectory, controls)
