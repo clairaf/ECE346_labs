@@ -292,10 +292,15 @@ class ILQR():
 				
 			if not changed:
 				print(f"Line search failed with reg = {lam} at step {i}")
+				status = "Line Search Failed"
 				break
 			if converged:
 				print(f"Converged after {i} steps.")
+				status = "Converged"
 				break
+
+		if not converged and changed:
+			status = "Iteration Exceed Limit"
 
 		# ******** Functions to compute the Jacobians of the dynamics  ************
 		# A, B = self.dyn.get_jacobian_np(trajectory, controls)
@@ -359,7 +364,7 @@ class ILQR():
 				t_process=t_process, # Time spent on planning
 				trajectory = trajectory,
 				controls = controls,
-				status=None, #	TODO: Fill this in
+				status=status, #	TODO: Fill this in
 				K_closed_loop=K, # TODO: Fill this in
 				k_open_loop=k # TODO: Fill this in
 				# Optional TODO: Fill in other information you want to return
