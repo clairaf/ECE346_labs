@@ -463,10 +463,20 @@ class TrajectoryPlanner():
                     self.planner.update_ref_path(new_path)
 
                     #REPLAN using ILQR ?? Not sure if this is right or how to set the ILQR
-                    ilqr = ILQR(new_path)
+                    replan = self.planner.plan(current_state, initial_controls)
 
                 # check if replan is successful and impliment step 3
-
+                if replan["status"] == "Converged":
+                    t0 = rospy.get_rostime().to_sec()
+                    nominal_x = replan["trajectory"]
+                    nominal_u = replan["controls"]
+                    K = replan["K_closed_loop"]
+                    dt = self.planner.dt
+                    T = nominal_x.shape[1]
+                    
+                    new_policy = Policy(nominal_x, nominal_u, K, t0, dt, T)
+                    self.policy_buffer.writeFromNonRT(new_policy)
+                    self.trajectory_pub.publish(new_policy.to_msg())
 
             ###############################
             #### END OF TODO #############
