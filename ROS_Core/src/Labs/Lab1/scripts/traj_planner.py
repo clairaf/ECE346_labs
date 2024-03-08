@@ -215,7 +215,13 @@ class TrajectoryPlanner():
         ###############################
         # Implement your control law here using ILQR policy
         # Hint: make sure that the difference in heading is between [-pi, pi]
-        u = u_ref + K_closed_loop@(x - x_ref)
+
+        # make sure difference in heading is between [-pi, pi]
+        x_diff = x - x_ref
+        x_diff[3] = np.mod(x_diff[3] + np.pi, 2 * np.pi) - np.pi
+
+
+        u = u_ref + K_closed_loop@(x_diff)
         accel = u[0]
         steer_rate = u[1]
 
@@ -451,23 +457,31 @@ class TrajectoryPlanner():
             '''
 
             # Step 1: Check if we need to replan
+            
             if self.plan_state_buffer.new_data_available and t_last_replan > self.replan_dt and self.planner_ready:
-                current_state = self.plan_state_buffer.readFromRT() # this returns an object from which we probably need to reference to get the current state
+                
+                current_state = self.plan_state_buffer.readFromRT()[:-1] # this returns an object from which we probably need to reference to get the current state
                 prev_policy = self.policy_buffer.readFromRT()
-                if prev_policy: # thsi is in step 2, not sure if prevoiou policy can be none?
-                    initial_controls = prev_policy.get_ref_controls()
+
+                if prev_policy:
+                    initial_controls = prev_policy.get_ref_controls(t = t_last_replan)
+
+                else: 
+                    initial_controls = None
+
                 if self.path_buffer.new_data_available:
-                    # Update the reference path in the iLQR
-                    # how do i get the new path?
+
                     new_path = self.path_buffer.readFromRT()
                     self.planner.update_ref_path(new_path)
 
-                    #REPLAN using ILQR ?? Not sure if this is right or how to set the ILQR
-                    replan = self.planner.plan(current_state, initial_controls)
+                replan = self.planner.plan(current_state, initial_controls, verbose = False) #added verbose argument
 
-                # check if replan is successful and impliment step 3
-                if replan["status"] == "Converged":
-                    t0 = rospy.get_rostime().to_sec()
+                t_last_replan = rospy.get_rostime().to_sec()
+                    # check if replan is successful and impliment step 3
+                if replan["status"] == 0:
+                    rospy.loginfo('successful replan...')
+                        
+                    t0 = t_last_replan
                     nominal_x = replan["trajectory"]
                     nominal_u = replan["controls"]
                     K = replan["K_closed_loop"]
@@ -476,8 +490,11 @@ class TrajectoryPlanner():
                     
                     new_policy = Policy(nominal_x, nominal_u, K, t0, dt, T)
                     self.policy_buffer.writeFromNonRT(new_policy)
+
+                    rospy.loginfo('Finish planning a new policy...')
                     self.trajectory_pub.publish(new_policy.to_msg())
 
+            else: t_last_replan += 0.01
             ###############################
             #### END OF TODO #############
             ###############################

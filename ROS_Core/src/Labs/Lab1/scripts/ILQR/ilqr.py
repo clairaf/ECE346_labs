@@ -223,7 +223,7 @@ class ILQR():
 		return trajectory_new, controls_new
 	
 	def plan(self, init_state: np.ndarray,
-				controls: Optional[np.ndarray] = None) -> Dict:
+				controls: Optional[np.ndarray] = None, verbose = False) -> Dict:
 		'''
 		Main ILQR loop.
 		Args:
@@ -292,15 +292,14 @@ class ILQR():
 				
 			if not changed:
 				print(f"Line search failed with reg = {lam} at step {i}")
-				status = "Line Search Failed"
 				break
 			if converged:
 				print(f"Converged after {i} steps.")
-				status = "Converged"
 				break
 
 		if not converged and changed:
-			status = "Iteration Exceed Limit"
+			status = -1
+		else: status = 0
 
 		# ******** Functions to compute the Jacobians of the dynamics  ************
 		# A, B = self.dyn.get_jacobian_np(trajectory, controls)
