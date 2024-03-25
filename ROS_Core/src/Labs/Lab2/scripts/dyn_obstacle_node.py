@@ -38,6 +38,7 @@ class DynObstacle():
         # 1. Create a subscriber to get <OdometryArray> message
         #    from the topic <self.dyn_obs_topic>
         #
+        self.pose_sub = rospy.Subscriber(self.dyn_obs_topic, OdometryArray)
         # 2. Inside the callback function, save <OdometryArray.odom_list> element
         #       (which is the list of dynamic obstacles' poses)
         #       to the class variable <self.dyn_obstacles>

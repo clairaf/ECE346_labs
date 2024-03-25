@@ -38,6 +38,9 @@ class TrajectoryPlanner():
         
         self.read_parameters()
         
+        # create an empty dictionary as a class variable
+        self.static_obstacle_dict = {}
+
         # Initialize the PWM converter
         self.pwm_converter = GeneratePwm()
         
@@ -80,6 +83,10 @@ class TrajectoryPlanner():
         # and no need to convert the throttle and steering angle to PWM
         self.simulation = get_ros_param('~simulation', True)
         
+        # read the topic name of the static obstacles from the ROS parameter
+        # with default parameter as "/Obstacles/Static"
+        self.static_obs = get_ros_param("~static_obs_topic", "/Obstacles/Static")
+
         # Read Planning parameters
         # if true, the planner will load a path from a file rather than subscribing to a path topic           
         self.replan_dt = get_ros_param('~replan_dt', 0.1)
@@ -125,6 +132,9 @@ class TrajectoryPlanner():
         self.pose_sub = rospy.Subscriber(self.odom_topic, Odometry, self.odometry_callback, queue_size=10)
         self.path_sub = rospy.Subscriber(self.path_topic, PathMsg, self.path_callback, queue_size=10)
 
+        # add to the subscriber the static obsticles, what should the queue size be??
+        self.static_obs_sub = rospy.Subscriber(self.static_obs, MarkerArray, self.obstacle_callback, queue_size = 10)
+
     def setup_service(self):
         '''
         Set up ros service
@@ -160,6 +170,17 @@ class TrajectoryPlanner():
         self.update_lock.release()
         return config
     
+    def obstacle_callback(self, marker_msg):
+        '''
+        Subscriber callback function of the obstacles
+        '''
+
+        for marker in marker_msg:
+            id, vert = get_obstacle_vertices(marker)
+            # I beleive this is the proper notation for updating a key, value pair
+            # in a dictionary
+            self.static_obstacle_dict[id] = vert
+
     def odometry_callback(self, odom_msg):
         '''
         Subscriber callback function of the robot pose
@@ -474,6 +495,12 @@ class TrajectoryPlanner():
                     new_path = self.path_buffer.readFromRT()
                     self.planner.update_ref_path(new_path)
 
+                # this is where the actual replan happens
+                # lab 2: at each time before replanning initalize an empty list : should this happen after the replan conditional? possibly
+                # skip the empty list adn just make it have all the values from the static_obstacle_dict
+                obstacles_list = list(self.static_obstacle_dict.values())
+                # pass obstacles_list into ILQR planner using update_obstacles
+                self.planner.update_obstacles(obstacles_list)
                 replan = self.planner.plan(current_state, initial_controls, verbose = False) #added verbose argument
 
                 t_last_replan = rospy.get_rostime().to_sec()
