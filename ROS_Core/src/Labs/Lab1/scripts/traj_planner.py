@@ -509,15 +509,16 @@ class TrajectoryPlanner():
                 
                 # extend the current list by the forward reachable set (dynamic obstacles)
                 #TODO: figure out how to get the current time, is it t_last_replan??
-                request = t_last_replan + np.arange(self.planner.T)*self.planner.dt
+                t_curr = rospy.get_rostime().to_sec()
+                request = t_curr + np.arange(self.planner.T)*self.planner.dt
                 response = self.get_frs(request)
-                frs_obstacles = frs_to_obstacle(response.FRS)
-
-                # publish the FRS 
-                self.frs_pub.publish(frs_to_msg(response))
+                frs_obstacles = frs_to_obstacle(response)
 
                 # add to the obstacles list
                 obstacles_list.extend(frs_obstacles)
+
+                # publish the FRS 
+                self.frs_pub.publish(frs_to_msg(response))
 
                 # pass obstacles_list into ILQR planner using update_obstacles
                 self.planner.update_obstacles(obstacles_list)

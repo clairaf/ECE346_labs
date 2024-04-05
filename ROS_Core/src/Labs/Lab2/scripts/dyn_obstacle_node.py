@@ -77,6 +77,7 @@ class DynObstacle():
         self.reset_srv = rospy.Service('/obstacles/get_frs', GetFRS, self.srv_cb)
         # put a self here, TODO: ask the TA ab it
 
+        self.setup_server()
 
         ###############################################
         ############## TODO ###########################
@@ -99,9 +100,9 @@ class DynObstacle():
         self.dyn_server = Server(configConfig, self.reconfigure_callback)
 
     def odemetry_callback(self, odometry_msg):
-        self.dyn_obstacles.append(odometry_msg.odom_list)
+        self.dyn_obstacles=odometry_msg.odom_list
     
-    def reconfigure_callback(self, config):
+    def reconfigure_callback(self, config, level):
         # note: will need to reconfigure, so prolly do the locking and such
         rospy.loginfo("""""")
         # get current variables from the config file
@@ -132,11 +133,10 @@ if __name__ == '__main__':
     ##########################################
     #TODO: Initialize a ROS Node with a DynObstacle object
     ##########################################
-    rospy.init_node('get_frs_server')
+    rospy.init_node('dynamic_obs')
     rospy.loginfo("start ROS Node")
 
-    DynObstacle()
+    dynamic_obs = DynObstacle()
 
     rospy.spin()
     
-    pass
