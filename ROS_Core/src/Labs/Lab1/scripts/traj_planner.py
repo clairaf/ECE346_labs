@@ -175,7 +175,7 @@ class TrajectoryPlanner():
         Subscriber callback function of the obstacles
         '''
 
-        for marker in marker_msg:
+        for marker in marker_msg.markers:
             id, vert = get_obstacle_vertices(marker)
             # I beleive this is the proper notation for updating a key, value pair
             # in a dictionary
