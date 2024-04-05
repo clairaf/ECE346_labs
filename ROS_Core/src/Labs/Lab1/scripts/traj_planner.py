@@ -59,7 +59,7 @@ class TrajectoryPlanner():
             threading.Thread(target=self.policy_planning_thread).start()
         else:
             threading.Thread(target=self.receding_horizon_planning_thread).start()
-    
+
     def read_parameters(self):
         '''
         This function reads the parameters from the parameter server
@@ -125,6 +125,9 @@ class TrajectoryPlanner():
         # Publisher for the control command
         self.control_pub = rospy.Publisher(self.control_topic, ServoMsg, queue_size=1)
 
+        # Publisher for the FRS information for visualization
+        self.frs_pub = rospy.Publisher('/vis/FRS', MarkerArray, queue_size = 1)
+
     def setup_subscriber(self):
         '''
         This function sets up the subscriber for the odometry and path
@@ -143,6 +146,10 @@ class TrajectoryPlanner():
         self.stop_srv = rospy.Service('/Planning/Stop', Empty, self.stop_planning_cb)
         
         self.dyn_server = Server(plannerConfig, self.reconfigure_callback)
+
+        rospy.wait_for_service('/obstacles/get_frs')
+    
+        self.get_frs = rospy.ServiceProxy('/obstacles/get_frs', GetFRS)
 
     def start_planning_cb(self, req):
         '''
@@ -175,7 +182,7 @@ class TrajectoryPlanner():
         Subscriber callback function of the obstacles
         '''
 
-        for marker in marker_msg:
+        for marker in marker_msg.markers:
             id, vert = get_obstacle_vertices(marker)
             # I beleive this is the proper notation for updating a key, value pair
             # in a dictionary
@@ -499,6 +506,19 @@ class TrajectoryPlanner():
                 # lab 2: at each time before replanning initalize an empty list : should this happen after the replan conditional? possibly
                 # skip the empty list adn just make it have all the values from the static_obstacle_dict
                 obstacles_list = list(self.static_obstacle_dict.values())
+                
+                # extend the current list by the forward reachable set (dynamic obstacles)
+                #TODO: figure out how to get the current time, is it t_last_replan??
+                request = t_last_replan + np.arange(self.planner.T)*self.planner.dt
+                response = self.get_frs(request)
+                frs_obstacles = frs_to_obstacle(response.FRS)
+
+                # publish the FRS 
+                self.frs_pub.publish(frs_to_msg(response))
+
+                # add to the obstacles list
+                obstacles_list.extend(frs_obstacles)
+
                 # pass obstacles_list into ILQR planner using update_obstacles
                 self.planner.update_obstacles(obstacles_list)
                 replan = self.planner.plan(current_state, initial_controls, verbose = False) #added verbose argument

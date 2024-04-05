@@ -38,7 +38,6 @@ class DynObstacle():
         # 1. Create a subscriber to get <OdometryArray> message
         #    from the topic <self.dyn_obs_topic>
         #
-        self.pose_sub = rospy.Subscriber(self.dyn_obs_topic, OdometryArray)
         # 2. Inside the callback function, save <OdometryArray.odom_list> element
         #       (which is the list of dynamic obstacles' poses)
         #       to the class variable <self.dyn_obstacles>
@@ -48,6 +47,8 @@ class DynObstacle():
         ###############################################
         # Class variable to store the most recent dynamic obstacle's poses
         self.dyn_obstacles = []
+
+        self.setup_subscriber()
         
         ###############################################
         ############## TODO ###########################
@@ -73,7 +74,9 @@ class DynObstacle():
 
         
         # Create a service server to calculate the FRS
-        reset_srv = rospy.Service('/obstacles/get_frs', GetFRS, self.srv_cb)
+        self.reset_srv = rospy.Service('/obstacles/get_frs', GetFRS, self.srv_cb)
+        # put a self here, TODO: ask the TA ab it
+
 
         ###############################################
         ############## TODO ###########################
@@ -89,6 +92,30 @@ class DynObstacle():
         # http://wiki.ros.org/ROS/Tutorials/WritingServiceClient%28python%29
         ###############################################
 
+    def setup_subscriber(self):
+        self.pose_sub = rospy.Subscriber(self.dyn_obs_topic, OdometryArray, self.odemetry_callback, queue_size = 10)
+    
+    def setup_server(self):
+        self.dyn_server = Server(configConfig, self.reconfigure_callback)
+
+    def odemetry_callback(self, odometry_msg):
+        self.dyn_obstacles.append(odometry_msg.odom_list)
+    
+    def reconfigure_callback(self, config):
+        # note: will need to reconfigure, so prolly do the locking and such
+        rospy.loginfo("""""")
+        # get current variables from the config file
+        self.K_vx = config['K_vx']
+        self.K_vy = config['K_vy']
+        self.K_y = config['K_y']
+        self.dx = config['dx']
+        self.dy = config['dy'] 
+        self.allow_lane_change = config['allow_lane_change']
+
+        #update the variables??
+        return config
+
+    
     def srv_cb(self, req):
         '''
         This function is a callback function of the service server
@@ -105,5 +132,11 @@ if __name__ == '__main__':
     ##########################################
     #TODO: Initialize a ROS Node with a DynObstacle object
     ##########################################
+    rospy.init_node('get_frs_server')
+    rospy.loginfo("start ROS Node")
+
+    DynObstacle()
+
+    rospy.spin()
     
     pass
