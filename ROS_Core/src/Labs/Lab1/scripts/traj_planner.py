@@ -38,7 +38,6 @@ class TrajectoryPlanner():
         self.update_lock = threading.Lock()
         self.latency = 0.0
 
-        self.total_path = []
         self.goal_locations = {1: [3.15, 0.15], 2: [3.15, 0.47], 
                                3: [5.9, 3.5], 4: [5.6, 3.5], 
                                5: [0.15, 3.5], 6: [0.45, 3.5], 
@@ -62,8 +61,6 @@ class TrajectoryPlanner():
         self.setup_subscriber()
 
         self.setup_service()
-
-        self.setup_path()
 
         # start planning and control thread
         threading.Thread(target=self.control_thread).start()
@@ -213,7 +210,7 @@ class TrajectoryPlanner():
         # inside the controller thread
         self.control_state_buffer.writeFromNonRT(odom_msg)
     
-    def setup_path(self):
+    def setup_path(self, x_pos, y_pos, goal):
         ''' Returns a list of Reference path objects'''
 
         rospy.loginfo('SETTING UP THE PATH')
@@ -225,36 +222,25 @@ class TrajectoryPlanner():
         #        goal_locations[i] = goal_configs[f'goal_{i}']
         #    goal_path.append(goal_configs['goal_order'])
         
-        #odom_msg = self.control_state_buffer.readFromRT()
-        #x_pos = odom_msg.pose.pose.position.x
-        #y_pos = odom_msg.pose.pose.position.y
-        x_start = 2.0
-        y_start = 0.15
+        x_start = x_pos
+        y_start = y_pos
 
-        for goal in self.goal_path:
-            
+        x_goal = self.goal_locations[goal][0] # x coordinate
+        y_goal = self.goal_locations[goal][1] # y_coordinate
 
-            x_goal = self.goal_locations[goal][0] # x coordinate
-            y_goal = self.goal_locations[goal][1] # y_coordinate
 
-            plan_request = PlanRequest([x_start, y_start], [x_goal, y_goal])
-            plan_response = self.plan_client(plan_request)
+        plan_request = PlanRequest([x_start, y_start], [x_goal, y_goal])
+        plan_response = self.plan_client(plan_request)
 
-            ref_path = self.generate_path(plan_response=plan_response)
-            self.total_path.append(ref_path)
+        ref_path = self.generate_path(plan_response=plan_response)
 
-            x_start = x_goal
-            y_start = y_goal
-        
         try:
             #ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
-            self.path_buffer.writeFromNonRT(self.total_path[0])
+            self.path_buffer.writeFromNonRT(ref_path)
             rospy.loginfo('Path received!')
         except:
             rospy.logwarn('Invalid path received! Move your robot and retry!')
         
-
-
 
     def generate_path(self, plan_response):
         path_msg = plan_response.path
@@ -510,6 +496,7 @@ class TrajectoryPlanner():
         rospy.loginfo('Receding Horizon Planning thread started waiting for ROS service calls...')
         index = 0
         t_last_replan = 0
+        first = True
         while not rospy.is_shutdown():
 
             '''
@@ -555,20 +542,16 @@ class TrajectoryPlanner():
                 rospy.loginfo(f'y_pos: {y_pos}')
 
                 curr_goal = self.goal_path[index]
+
+                if first is True:
+                    self.setup_path(x_pos, y_pos, curr_goal)
                 
 
-                if ((x_pos > self.goal_locations[curr_goal][0]-0.5) and (x_pos < self.goal_locations[curr_goal][0]+0.5)
+                elif ((x_pos > self.goal_locations[curr_goal][0]-0.5) and (x_pos < self.goal_locations[curr_goal][0]+0.5)
                     ) and ((y_pos > self.goal_locations[curr_goal][1]-0.25) and (y_pos < self.goal_locations[curr_goal][1]+0.25)):
                     rospy.loginfo("WE ARE GETTING THE NEXT PATH")
                     
-                    # TODO: think about this: a source of inaccuracy could be our paths and we maybe want to dynamically calculate the next path
-                    # instead of doing them all at once and making a large list
-                    try:
-                        self.path_buffer.writeFromNonRT(self.total_path[index+1])
-                        rospy.loginfo('Path received!')
-                        if index < len(self.goal_path) -1: index += 1
-                    except:
-                        rospy.logwarn('Invalid path received! Move your robot and retry!')
+                    self.setup_path(x_pos, y_pos, curr_goal)
                     
 
                 if self.path_buffer.new_data_available:
