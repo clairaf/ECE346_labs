@@ -6,13 +6,15 @@ import numpy as np
 import os
 import time
 import queue
+import yaml
 
 from utils import RealtimeBuffer, Policy, GeneratePwm
 from ILQR import RefPath
-from ILQR import ILQR
+from ILQR import ILQR as ILQR
 
 from racecar_msgs.msg import ServoMsg
 from racecar_planner.cfg import plannerConfig
+from racecar_routing.srv import Plan, PlanResponse, PlanRequest
 
 from dynamic_reconfigure.server import Server
 from tf.transformations import euler_from_quaternion
@@ -22,7 +24,7 @@ from std_srvs.srv import Empty, EmptyResponse
 
 # You will use those for lab2   
 from racecar_msgs.msg import OdometryArray
-from utils import frs_to_obstacle, frs_to_msg, get_obstacle_vertices, get_ros_param
+from utils import get_obstacle_vertices, get_ros_param
 from visualization_msgs.msg import MarkerArray
 from racecar_obs_detection.srv import GetFRS, GetFRSResponse
 
@@ -35,7 +37,10 @@ class TrajectoryPlanner():
         # Indicate if the planner is used to generate a new trajectory
         self.update_lock = threading.Lock()
         self.latency = 0.0
-        
+
+        self.total_path = []
+        self.goal_locations = {}
+        self.goal_path = [1, 3, 9]
         self.read_parameters()
         
         # create an empty dictionary as a class variable
@@ -52,6 +57,8 @@ class TrajectoryPlanner():
         self.setup_subscriber()
 
         self.setup_service()
+
+        self.setup_path()
 
         # start planning and control thread
         threading.Thread(target=self.control_thread).start()
@@ -133,7 +140,6 @@ class TrajectoryPlanner():
         This function sets up the subscriber for the odometry and path
         '''
         self.pose_sub = rospy.Subscriber(self.odom_topic, Odometry, self.odometry_callback, queue_size=10)
-        self.path_sub = rospy.Subscriber(self.path_topic, PathMsg, self.path_callback, queue_size=10)
 
         # add to the subscriber the static obsticles, what should the queue size be??
         self.static_obs_sub = rospy.Subscriber(self.static_obs, MarkerArray, self.obstacle_callback, queue_size = 10)
@@ -147,9 +153,13 @@ class TrajectoryPlanner():
         
         self.dyn_server = Server(plannerConfig, self.reconfigure_callback)
 
-        rospy.wait_for_service('/obstacles/get_frs')
+        #rospy.wait_for_service('/obstacles/get_frs')
     
-        self.get_frs = rospy.ServiceProxy('/obstacles/get_frs', GetFRS)
+        #self.get_frs = rospy.ServiceProxy('/obstacles/get_frs', GetFRS)
+
+        rospy.wait_for_service('/routing/plan')
+        self.plan_client = rospy.ServiceProxy('/routing/plan', Plan)
+        rospy.loginfo("Service /routing/plan is ready")
 
     def start_planning_cb(self, req):
         '''
@@ -198,7 +208,58 @@ class TrajectoryPlanner():
         # inside the controller thread
         self.control_state_buffer.writeFromNonRT(odom_msg)
     
-    def path_callback(self, path_msg):
+    def setup_path(self):
+        ''' Returns a list of Reference path objects'''
+
+        rospy.loginfo('SETTING UP THE PATH')
+        # dictionary of goal locations
+        goal_locations = {}
+        # list for the goal order
+        goal_path = []
+
+        # read the config from the yaml file
+        #with open('task1.yaml', 'r') as file:
+        #    goal_configs = yaml.safe_load(file)
+        #    for i in range(1, 14):
+        #        goal_locations[i] = goal_configs[f'goal_{i}']
+        #    goal_path.append(goal_configs['goal_order'])
+
+        self.goal_locations = {1: [3.15, 0.15], 2: [3.15, 0.47], 3: [5.9, 3.5], 4: [5.6, 3.5], 5: [0.15, 3.5], 6: [0.45, 3.5], 7: [3, 1.1], 8: [3, 0.8], 9: [3, 2.2], 10: [0.75, 2.1], 11: [0.75, 4.3], 12: [4.6, 4.6]}
+
+        goal_path = [1, 3, 6]
+        
+        x_start = 2.0
+        y_start = 0.15
+
+        for goal in self.goal_path:
+            
+
+            x_goal = self.goal_locations[goal][0] # x coordinate
+            y_goal = self.goal_locations[goal][1] # y_coordinate
+
+            rospy.loginfo(f'x goal : {x_goal}, y goal: {y_goal}')
+
+            plan_request = PlanRequest([x_start, y_start], [x_goal, y_goal])
+            plan_response = self.plan_client(plan_request)
+
+            ref_path = self.generate_path(plan_response=plan_response)
+            self.total_path.append(ref_path)
+
+            x_start = x_goal
+            y_start = y_goal
+        
+        try:
+            #ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
+            self.path_buffer.writeFromNonRT(self.total_path[0])
+            rospy.loginfo('Path received!')
+        except:
+            rospy.logwarn('Invalid path received! Move your robot and retry!')
+        
+
+
+
+    def generate_path(self, plan_response):
+        path_msg = plan_response.path
         x = []
         y = []
         width_L = []
@@ -213,13 +274,9 @@ class TrajectoryPlanner():
             speed_limit.append(waypoint.pose.orientation.z)
                     
         centerline = np.array([x, y])
-        
-        try:
-            ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
-            self.path_buffer.writeFromNonRT(ref_path)
-            rospy.loginfo('Path received!')
-        except:
-            rospy.logwarn('Invalid path received! Move your robot and retry!')
+        ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
+
+        return ref_path
 
     @staticmethod
     def compute_control(x, x_ref, u_ref, K_closed_loop):
@@ -244,12 +301,9 @@ class TrajectoryPlanner():
         # Implement your control law here using ILQR policy
         # Hint: make sure that the difference in heading is between [-pi, pi]
 
-        # make sure difference in heading is between [-pi, pi]
-        x_diff = x - x_ref
-        x_diff[3] = np.mod(x_diff[3] + np.pi, 2 * np.pi) - np.pi
-
-
-        u = u_ref + K_closed_loop@(x_diff)
+        dx = x - x_ref
+        dx[3] = np.mod(dx[3] + np.pi, 2 * np.pi) - np.pi
+        u = u_ref + K_closed_loop @ dx
         accel = u[0]
         steer_rate = u[1]
 
@@ -448,6 +502,7 @@ class TrajectoryPlanner():
                 # publish the new policy for RVIZ visualization
                 self.trajectory_pub.publish(new_policy.to_msg())        
 
+    # we want to use this because we want to be able to see the obstacles when in a new state and react
     def receding_horizon_planning_thread(self):
         '''
         This function is the main thread for receding horizon planning
@@ -455,6 +510,7 @@ class TrajectoryPlanner():
         '''
         
         rospy.loginfo('Receding Horizon Planning thread started waiting for ROS service calls...')
+        index = 0
         t_last_replan = 0
         while not rospy.is_shutdown():
             ###############################
@@ -497,30 +553,32 @@ class TrajectoryPlanner():
                 else: 
                     initial_controls = None
 
+                odom_msg = self.control_state_buffer.readFromRT()
+                x_pos = odom_msg.pose.pose.position.x
+                y_pos = odom_msg.pose.pose.position.y
+
+                rospy.loginfo(f'x_pos: {x_pos}')
+                rospy.loginfo(f'y_pos: {y_pos}')
+                curr_goal = self.goal_path[index]
+                
+
+                if ((x_pos > self.goal_locations[curr_goal][0]-0.5) and (x_pos < self.goal_locations[curr_goal][0]+0.5)) and ((y_pos > self.goal_locations[curr_goal][1]-0.25) and (y_pos < self.goal_locations[curr_goal][1]+0.25)):
+                    rospy.loginfo("WE ARE GETTING THE NEXT PATH")
+                    try:
+                        #ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
+                        self.path_buffer.writeFromNonRT(self.total_path[index+1])
+                        rospy.loginfo('Path received!')
+                        index += 1
+                    except:
+                        rospy.logwarn('Invalid path received! Move your robot and retry!')
+                    
+
                 if self.path_buffer.new_data_available:
+                    rospy.loginfo('new path...')
 
                     new_path = self.path_buffer.readFromRT()
                     self.planner.update_ref_path(new_path)
 
-                # this is where the actual replan happens
-                # lab 2: at each time before replanning initalize an empty list : should this happen after the replan conditional? possibly
-                # skip the empty list adn just make it have all the values from the static_obstacle_dict
-                obstacles_list = list(self.static_obstacle_dict.values())
-                
-                # extend the current list by the forward reachable set (dynamic obstacles)
-                #TODO: figure out how to get the current time, is it t_last_replan??
-                request = t_last_replan + np.arange(self.planner.T)*self.planner.dt
-                response = self.get_frs(request)
-                frs_obstacles = frs_to_obstacle(response.FRS)
-
-                # publish the FRS 
-                self.frs_pub.publish(frs_to_msg(response))
-
-                # add to the obstacles list
-                obstacles_list.extend(frs_obstacles)
-
-                # pass obstacles_list into ILQR planner using update_obstacles
-                self.planner.update_obstacles(obstacles_list)
                 replan = self.planner.plan(current_state, initial_controls, verbose = False) #added verbose argument
 
                 t_last_replan = rospy.get_rostime().to_sec()

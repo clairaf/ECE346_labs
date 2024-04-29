@@ -4,10 +4,10 @@ import time
 import os
 import numpy as np
 import jax
-from .dynamics import Bicycle5D
-from .cost import Cost, CollisionChecker, Obstacle
-from .ref_path import RefPath
-from .config import Config
+from dynamics import Bicycle5D
+from cost import Cost, CollisionChecker, Obstacle
+from ref_path import RefPath
+from config import Config
 import time
 
 status_lookup = ["Iteration Limit Exceed",

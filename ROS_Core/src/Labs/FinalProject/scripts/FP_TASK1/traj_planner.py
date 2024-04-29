@@ -10,7 +10,7 @@ import yaml
 
 from utils import RealtimeBuffer, Policy, GeneratePwm
 from ILQR import RefPath
-from ILQR.ilqr_jax import ILQR_jax as ILQR
+from ILQR import ILQR_jax as ILQR
 
 from racecar_msgs.msg import ServoMsg
 from racecar_planner.cfg import plannerConfig
@@ -224,9 +224,10 @@ class TrajectoryPlanner():
         print(goal_path)
 
         total_path = []
+        x_start = 0.0 # figure out how to get current location here
+        y_start = 0.0 # figure out how to get current location here
         for goal in goal_path:
-            x_start = 0.0 # figure out how to get current location here
-            y_start = 0.0 # figure out how to get current location here
+            
 
             x_goal = goal_locations[goal][0] # x coordinate
             y_goal = goal_locations[goal][1] # y_coordinate
@@ -236,6 +237,9 @@ class TrajectoryPlanner():
 
             ref_path = self.generate_path(plan_response=plan_response)
             total_path.append(ref_path)
+
+            x_start = x_goal
+            y_start = y_goal
         
 
 
@@ -258,12 +262,12 @@ class TrajectoryPlanner():
         centerline = np.array([x, y])
         ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
         
-       # try:
-       #     ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
-       #     self.path_buffer.writeFromNonRT(ref_path)
-       #     rospy.loginfo('Path received!')
-       # except:
-       #     rospy.logwarn('Invalid path received! Move your robot and retry!')
+        try:
+            ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
+            self.path_buffer.writeFromNonRT(ref_path)
+            rospy.loginfo('Path received!')
+        except:
+            rospy.logwarn('Invalid path received! Move your robot and retry!')
 
         return ref_path
 
@@ -528,8 +532,7 @@ class TrajectoryPlanner():
                     for example: self.trajectory_pub.publish(new_policy.to_msg())       
             '''
 
-            # Step 1: Check if we need to replan, we need to replan when we reach the goal of the one
-            # and there is a new goal in queue
+            # Step 1: Check if we need to replan
             
             if self.plan_state_buffer.new_data_available and t_last_replan > self.replan_dt and self.planner_ready:
                 
@@ -542,23 +545,16 @@ class TrajectoryPlanner():
                 else: 
                     initial_controls = None
 
-                # replan as far as the list of trajectory paths (until all the goals are done) BUT DONT want to 
-                # INTERUPT THE CURRENT PATH SO HOW DO I DO THIS??
                 if self.path_buffer.new_data_available:
+                    rospy.loginfo('new path...')
 
-                    new_path = self.path_buffer.readFromRT() # TODO: How do I make this dynamic?? so that once we finish the one path we start the next??
+                    new_path = self.path_buffer.readFromRT()
                     self.planner.update_ref_path(new_path)
 
-                # update the obstacles list for the ILQR
-                obstacles_list = list(self.static_obstacle_dict.values())
-
-                # pass obstacles_list into ILQR planner using update_obstacles
-                self.planner.update_obstacles(obstacles_list)
                 replan = self.planner.plan(current_state, initial_controls, verbose = False) #added verbose argument
 
                 t_last_replan = rospy.get_rostime().to_sec()
-                
-                # check if replan is successful and impliment step 3
+                    # check if replan is successful and impliment step 3
                 if replan["status"] == 0:
                     rospy.loginfo('successful replan...')
                         

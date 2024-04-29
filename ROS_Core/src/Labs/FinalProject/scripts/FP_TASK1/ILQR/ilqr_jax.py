@@ -10,10 +10,10 @@ import jax
 from jax import numpy as jnp
 from jaxlib.xla_extension import ArrayImpl
 
-from .dynamics import Bicycle5D
-from .cost import Cost, CollisionChecker, Obstacle
-from .ref_path import RefPath
-from .config import Config
+from dynamics import Bicycle5D
+from cost import Cost, CollisionChecker, Obstacle
+from ref_path import RefPath
+from config import Config
 import time 
 
 status_lookup = ["Iteration Limit Exceed",
