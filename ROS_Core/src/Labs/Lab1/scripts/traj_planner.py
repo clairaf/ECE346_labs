@@ -225,11 +225,11 @@ class TrajectoryPlanner():
         #        goal_locations[i] = goal_configs[f'goal_{i}']
         #    goal_path.append(goal_configs['goal_order'])
         
-        odom_msg = self.control_state_buffer.readFromRT()
-        x_pos = odom_msg.pose.pose.position.x
-        y_pos = odom_msg.pose.pose.position.y
-        x_start = x_pos
-        y_start = y_pos
+        #odom_msg = self.control_state_buffer.readFromRT()
+        #x_pos = odom_msg.pose.pose.position.x
+        #y_pos = odom_msg.pose.pose.position.y
+        x_start = 2.0
+        y_start = 0.15
 
         for goal in self.goal_path:
             
@@ -551,6 +551,8 @@ class TrajectoryPlanner():
                 odom_msg = self.control_state_buffer.readFromRT()
                 x_pos = odom_msg.pose.pose.position.x
                 y_pos = odom_msg.pose.pose.position.y
+                rospy.loginfo(f'x_pos: {x_pos}')
+                rospy.loginfo(f'y_pos: {y_pos}')
 
                 curr_goal = self.goal_path[index]
                 
@@ -578,9 +580,9 @@ class TrajectoryPlanner():
                 # this is where the actual replan happens
                 # lab 2: at each time before replanning initalize an empty list : should this happen after the replan conditional? possibly
                 # skip the empty list adn just make it have all the values from the static_obstacle_dict
-                obstacles_list = list(self.static_obstacle_dict.values())
+                #obstacles_list = list(self.static_obstacle_dict.values())
 
-                self.planner.update_obstacles(obstacles_list)
+                #self.planner.update_obstacles(obstacles_list)
                 replan = self.planner.plan(current_state, initial_controls, verbose = False) #added verbose argument
 
                 t_last_replan = rospy.get_rostime().to_sec()
