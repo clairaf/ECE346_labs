@@ -545,14 +545,17 @@ class TrajectoryPlanner():
 
                 if first is True:
                     self.setup_path(x_pos, y_pos, curr_goal)
-                
+                    first = False                
 
                 elif ((x_pos > self.goal_locations[curr_goal][0]-0.5) and (x_pos < self.goal_locations[curr_goal][0]+0.5)
                     ) and ((y_pos > self.goal_locations[curr_goal][1]-0.25) and (y_pos < self.goal_locations[curr_goal][1]+0.25)):
                     rospy.loginfo("WE ARE GETTING THE NEXT PATH")
-                    
-                    self.setup_path(x_pos, y_pos, curr_goal)
-                    
+
+                    if index < len(self.goal_path) -1:
+                        next_goal = self.goal_path[index+1]
+                        self.setup_path(x_pos, y_pos, next_goal)
+                        index += 1
+                  
 
                 if self.path_buffer.new_data_available:
                     rospy.loginfo('new path...')
