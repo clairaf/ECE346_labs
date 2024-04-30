@@ -37,7 +37,14 @@ class TrajectoryPlanner():
         # Indicate if the planner is used to generate a new trajectory
         self.update_lock = threading.Lock()
         self.latency = 0.0
-        
+
+        self.goal_locations = {1: [3.15, 0.15], 2: [3.15, 0.47], 
+                               3: [5.9, 3.5], 4: [5.6, 3.5], 
+                               5: [0.15, 3.5], 6: [0.45, 3.5], 
+                               7: [3, 1.1], 8: [3, 0.8], 
+                               9: [3, 2.2], 10: [0.75, 2.1], 
+                               11: [0.75, 4.3], 12: [4.6, 4.6]}
+        self.goal_path = [1, 3, 9, 8, 10, 11, 12, 6, 2, 4, 9, 7, 9, 12, 5, 1]
         self.read_parameters()
         
         # create an empty dictionary as a class variable
@@ -54,8 +61,6 @@ class TrajectoryPlanner():
         self.setup_subscriber()
 
         self.setup_service()
-
-        self.setup_path()
 
         # start planning and control thread
         threading.Thread(target=self.control_thread).start()
@@ -150,9 +155,9 @@ class TrajectoryPlanner():
         
         self.dyn_server = Server(plannerConfig, self.reconfigure_callback)
 
-        rospy.wait_for_service('/obstacles/get_frs')
+        #rospy.wait_for_service('/obstacles/get_frs')
     
-        self.get_frs = rospy.ServiceProxy('/obstacles/get_frs', GetFRS)
+        #self.get_frs = rospy.ServiceProxy('/obstacles/get_frs', GetFRS)
 
         rospy.wait_for_service('/routing/plan')
         self.plan_client = rospy.ServiceProxy('/routing/plan', Plan)
@@ -205,44 +210,37 @@ class TrajectoryPlanner():
         # inside the controller thread
         self.control_state_buffer.writeFromNonRT(odom_msg)
     
-    def setup_path(self):
+    def setup_path(self, x_pos, y_pos, goal):
         ''' Returns a list of Reference path objects'''
 
-        # dictionary of goal locations
-        goal_locations = {}
-        # list for the goal order
-        goal_path = []
+        rospy.loginfo('SETTING UP THE PATH')
 
         # read the config from the yaml file
-        with open('task1.yaml', 'r') as file:
-            goal_configs = yaml.safe_load(file)
-            for i in range(1, 14):
-                goal_locations[i] = goal_configs[f'goal_{i}']
-            goal_path.append(goal_configs['goal_order'])
-
-        print(goal_locations)
-        print(goal_path)
-
-        total_path = []
-        x_start = 0.0 # figure out how to get current location here
-        y_start = 0.0 # figure out how to get current location here
-        for goal in goal_path:
-            
-
-            x_goal = goal_locations[goal][0] # x coordinate
-            y_goal = goal_locations[goal][1] # y_coordinate
-
-            plan_request = PlanRequest([x_start, y_start], [x_goal, y_goal])
-            plan_response = self.plan_client(plan_request)
-
-            ref_path = self.generate_path(plan_response=plan_response)
-            total_path.append(ref_path)
-
-            x_start = x_goal
-            y_start = y_goal
+        #with open('task1.yaml', 'r') as file:
+        #    goal_configs = yaml.safe_load(file)
+        #    for i in range(1, 14):
+        #        goal_locations[i] = goal_configs[f'goal_{i}']
+        #    goal_path.append(goal_configs['goal_order'])
         
+        x_start = x_pos
+        y_start = y_pos
+
+        x_goal = self.goal_locations[goal][0] # x coordinate
+        y_goal = self.goal_locations[goal][1] # y_coordinate
 
 
+        plan_request = PlanRequest([x_start, y_start], [x_goal, y_goal])
+        plan_response = self.plan_client(plan_request)
+
+        ref_path = self.generate_path(plan_response=plan_response)
+
+        try:
+            #ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
+            self.path_buffer.writeFromNonRT(ref_path)
+            rospy.loginfo('Path received!')
+        except:
+            rospy.logwarn('Invalid path received! Move your robot and retry!')
+        
 
     def generate_path(self, plan_response):
         path_msg = plan_response.path
@@ -261,13 +259,6 @@ class TrajectoryPlanner():
                     
         centerline = np.array([x, y])
         ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
-        
-        try:
-            ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
-            self.path_buffer.writeFromNonRT(ref_path)
-            rospy.loginfo('Path received!')
-        except:
-            rospy.logwarn('Invalid path received! Move your robot and retry!')
 
         return ref_path
 
@@ -503,11 +494,10 @@ class TrajectoryPlanner():
         '''
         
         rospy.loginfo('Receding Horizon Planning thread started waiting for ROS service calls...')
+        index = 0
         t_last_replan = 0
+        first = True
         while not rospy.is_shutdown():
-            ###############################
-            #### TODO: Task 3 #############
-            ###############################
 
             '''
             Implement the receding horizon planning thread
@@ -545,12 +535,37 @@ class TrajectoryPlanner():
                 else: 
                     initial_controls = None
 
+                odom_msg = self.control_state_buffer.readFromRT()
+                x_pos = odom_msg.pose.pose.position.x
+                y_pos = odom_msg.pose.pose.position.y
+                rospy.loginfo(f'x_pos: {x_pos}')
+                rospy.loginfo(f'y_pos: {y_pos}')
+
+                curr_goal = self.goal_path[index]
+
+                if first is True:
+                    self.setup_path(x_pos, y_pos, curr_goal)
+                
+
+                elif ((x_pos > self.goal_locations[curr_goal][0]-0.5) and (x_pos < self.goal_locations[curr_goal][0]+0.5)
+                    ) and ((y_pos > self.goal_locations[curr_goal][1]-0.25) and (y_pos < self.goal_locations[curr_goal][1]+0.25)):
+                    rospy.loginfo("WE ARE GETTING THE NEXT PATH")
+                    
+                    self.setup_path(x_pos, y_pos, curr_goal)
+                    
+
                 if self.path_buffer.new_data_available:
                     rospy.loginfo('new path...')
 
                     new_path = self.path_buffer.readFromRT()
                     self.planner.update_ref_path(new_path)
 
+                # this is where the actual replan happens
+                # lab 2: at each time before replanning initalize an empty list : should this happen after the replan conditional? possibly
+                # skip the empty list adn just make it have all the values from the static_obstacle_dict
+                #obstacles_list = list(self.static_obstacle_dict.values())
+
+                #self.planner.update_obstacles(obstacles_list)
                 replan = self.planner.plan(current_state, initial_controls, verbose = False) #added verbose argument
 
                 t_last_replan = rospy.get_rostime().to_sec()
