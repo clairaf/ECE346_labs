@@ -497,6 +497,8 @@ class TrajectoryPlanner():
         index = 0
         t_last_replan = 0
         first = True
+        curr_goal = self.goal_path[index]
+        
         while not rospy.is_shutdown():
 
             '''
@@ -541,8 +543,6 @@ class TrajectoryPlanner():
                 rospy.loginfo(f'x_pos: {x_pos}')
                 rospy.loginfo(f'y_pos: {y_pos}')
 
-                curr_goal = self.goal_path[index]
-
                 if first is True:
                     self.setup_path(x_pos, y_pos, curr_goal)
                     first = False                
@@ -551,10 +551,11 @@ class TrajectoryPlanner():
                     ) and ((y_pos > self.goal_locations[curr_goal][1]-0.25) and (y_pos < self.goal_locations[curr_goal][1]+0.25)):
                     rospy.loginfo("WE ARE GETTING THE NEXT PATH")
 
-                    if index < len(self.goal_path) -1:
-                        next_goal = self.goal_path[index+1]
-                        self.setup_path(x_pos, y_pos, next_goal)
+                    if index < len(self.goal_path):
                         index += 1
+                    
+                    curr_goal = self.goal_path[index]
+                    self.setup_path(x_pos, y_pos, curr_goal)
                   
 
                 if self.path_buffer.new_data_available:
