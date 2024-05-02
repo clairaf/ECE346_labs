@@ -6,13 +6,15 @@ import numpy as np
 import os
 import time
 import queue
+import yaml
 
 from utils import RealtimeBuffer, Policy, GeneratePwm
 from ILQR import RefPath
-from ILQR import ILQR
+from ILQR import ILQR_jax as ILQR
 
 from racecar_msgs.msg import ServoMsg
 from racecar_planner.cfg import plannerConfig
+from racecar_routing.srv import Plan, PlanResponse, PlanRequest
 
 from dynamic_reconfigure.server import Server
 from tf.transformations import euler_from_quaternion
@@ -22,8 +24,7 @@ from std_srvs.srv import Empty, EmptyResponse
 
 # You will use those for lab2   
 from racecar_msgs.msg import OdometryArray
-from racecar_routing.srv import Plan, PlanResponse, PlanRequest
-from utils import frs_to_obstacle, frs_to_msg, get_obstacle_vertices, get_ros_param
+from utils import get_obstacle_vertices, get_ros_param
 from visualization_msgs.msg import MarkerArray
 from racecar_obs_detection.srv import GetFRS, GetFRSResponse
 
@@ -43,8 +44,7 @@ class TrajectoryPlanner():
                                7: [3, 1.1], 8: [3, 0.8], 
                                9: [3, 2.2], 10: [0.75, 2.1], 
                                11: [0.75, 4.3], 12: [4.6, 4.6]}
-        self.goal_path = [1, 3, 9, 7, 10, 11, 12, 5, 1, 3, 9, 7, 9, 12, 5, 1]
-        
+        self.goal_path = [1, 3, 9, 8, 10, 11, 12, 6, 2, 4, 9, 7, 9, 12, 5, 1]
         self.read_parameters()
         
         # create an empty dictionary as a class variable
@@ -155,9 +155,9 @@ class TrajectoryPlanner():
         
         self.dyn_server = Server(plannerConfig, self.reconfigure_callback)
 
-        rospy.wait_for_service('/obstacles/get_frs')
-        self.get_frs = rospy.ServiceProxy('/obstacles/get_frs', GetFRS)
-        rospy.loginfo("Service /obstacles/get_frs is ready")
+        #rospy.wait_for_service('/obstacles/get_frs')
+    
+        #self.get_frs = rospy.ServiceProxy('/obstacles/get_frs', GetFRS)
 
         rospy.wait_for_service('/routing/plan')
         self.plan_client = rospy.ServiceProxy('/routing/plan', Plan)
@@ -285,12 +285,9 @@ class TrajectoryPlanner():
         # Implement your control law here using ILQR policy
         # Hint: make sure that the difference in heading is between [-pi, pi]
 
-        # make sure difference in heading is between [-pi, pi]
-        x_diff = x - x_ref
-        x_diff[3] = np.mod(x_diff[3] + np.pi, 2 * np.pi) - np.pi
-
-
-        u = u_ref + K_closed_loop@(x_diff)
+        dx = x - x_ref
+        dx[3] = np.mod(dx[3] + np.pi, 2 * np.pi) - np.pi
+        u = u_ref + K_closed_loop @ dx
         accel = u[0]
         steer_rate = u[1]
 
@@ -319,7 +316,7 @@ class TrajectoryPlanner():
                         ])
             x_new = x + dx*dt
             x_new[2] = max(0, x_new[2]) # do not allow negative velocity
-            x_new[2] = min(x_new[2], 1) # do not was to exceed 1 m/s velocity
+            rospy.loginfo(f"velocity: {x_new[2]}")
             x_new[3] = np.mod(x_new[3] + np.pi, 2 * np.pi) - np.pi
             x_new[-1] = u[1]
             return x_new
@@ -490,6 +487,7 @@ class TrajectoryPlanner():
                 # publish the new policy for RVIZ visualization
                 self.trajectory_pub.publish(new_policy.to_msg())        
 
+    # we want to use this because we want to be able to see the obstacles when in a new state and react
     def receding_horizon_planning_thread(self):
         '''
         This function is the main thread for receding horizon planning
@@ -501,10 +499,8 @@ class TrajectoryPlanner():
         t_last_replan = 0
         first = True
         curr_goal = self.goal_path[index]
+        
         while not rospy.is_shutdown():
-            ###############################
-            #### TODO: Task 3 #############
-            ###############################
 
             '''
             Implement the receding horizon planning thread
@@ -542,7 +538,6 @@ class TrajectoryPlanner():
                 else: 
                     initial_controls = None
 
-                # add our established path
                 odom_msg = self.control_state_buffer.readFromRT()
                 x_pos = odom_msg.pose.pose.position.x
                 y_pos = odom_msg.pose.pose.position.y
@@ -562,8 +557,10 @@ class TrajectoryPlanner():
                     
                     curr_goal = self.goal_path[index]
                     self.setup_path(x_pos, y_pos, curr_goal)
-                
+                  
+
                 if self.path_buffer.new_data_available:
+                    rospy.loginfo('new path...')
 
                     new_path = self.path_buffer.readFromRT()
                     self.planner.update_ref_path(new_path)
@@ -572,27 +569,13 @@ class TrajectoryPlanner():
                 # lab 2: at each time before replanning initalize an empty list : should this happen after the replan conditional? possibly
                 # skip the empty list adn just make it have all the values from the static_obstacle_dict
                 obstacles_list = list(self.static_obstacle_dict.values())
-                
-                # extend the current list by the forward reachable set (dynamic obstacles)
-                #TODO: figure out how to get the current time, is it t_last_replan??
-                t_curr = rospy.get_rostime().to_sec()
-                request = t_curr + np.arange(self.planner.T)*self.planner.dt
-                response = self.get_frs(request)
-                frs_obstacles = frs_to_obstacle(response)
 
-                # add to the obstacles list
-                obstacles_list.extend(frs_obstacles)
-
-                # publish the FRS 
-                self.frs_pub.publish(frs_to_msg(response))
-
-                # pass obstacles_list into ILQR planner using update_obstacles
                 self.planner.update_obstacles(obstacles_list)
                 replan = self.planner.plan(current_state, initial_controls, verbose = False) #added verbose argument
 
                 t_last_replan = rospy.get_rostime().to_sec()
                     # check if replan is successful and impliment step 3
-                if replan["status"] == 0:
+                if replan["status"] == 1:
                     rospy.loginfo('successful replan...')
                         
                     t0 = t_last_replan

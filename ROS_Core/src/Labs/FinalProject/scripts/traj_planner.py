@@ -10,7 +10,7 @@ import yaml
 
 from utils import RealtimeBuffer, Policy, GeneratePwm
 from ILQR import RefPath
-from ILQR import ILQR as ILQR
+from ILQR import ILQR_jax as ILQR
 
 from racecar_msgs.msg import ServoMsg
 from racecar_planner.cfg import plannerConfig
@@ -567,9 +567,9 @@ class TrajectoryPlanner():
                 # this is where the actual replan happens
                 # lab 2: at each time before replanning initalize an empty list : should this happen after the replan conditional? possibly
                 # skip the empty list adn just make it have all the values from the static_obstacle_dict
-                #obstacles_list = list(self.static_obstacle_dict.values())
+                obstacles_list = list(self.static_obstacle_dict.values())
 
-                #self.planner.update_obstacles(obstacles_list)
+                self.planner.update_obstacles(obstacles_list)
                 replan = self.planner.plan(current_state, initial_controls, verbose = False) #added verbose argument
 
                 t_last_replan = rospy.get_rostime().to_sec()
