@@ -101,7 +101,7 @@ progress_weight: 0  # weight for the progress cost
 # Lane Boundary Cost
 dim_right_boundary: 5 # dimension of lane boundary in the reference
 dim_left_boundary: 6 # dimension of lane boundary in the reference
-lane_boundary_a: 30.0 # parameter for lane boundary cost
+lane_boundary_a: 50.0 # parameter for lane boundary cost
 lane_boundary_b: 0.0 #2.0 # parameter for ExpLinear Cost
 
 ########        Control Cost          ############

@@ -316,7 +316,6 @@ class TrajectoryPlanner():
                         ])
             x_new = x + dx*dt
             x_new[2] = max(0, x_new[2]) # do not allow negative velocity
-            rospy.loginfo(f"velocity: {x_new[2]}")
             x_new[3] = np.mod(x_new[3] + np.pi, 2 * np.pi) - np.pi
             x_new[-1] = u[1]
             return x_new
