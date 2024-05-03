@@ -7,6 +7,7 @@ import os
 import time
 import queue
 import yaml
+import pickle
 
 from utils import RealtimeBuffer, Policy, GeneratePwm
 from ILQR import RefPath
@@ -15,6 +16,8 @@ from ILQR import ILQR_jax as ILQR
 from racecar_msgs.msg import ServoMsg
 from racecar_planner.cfg import plannerConfig
 from racecar_routing.srv import Plan, PlanResponse, PlanRequest
+from geometry_msgs.msg import PoseStamped
+
 
 from dynamic_reconfigure.server import Server
 from tf.transformations import euler_from_quaternion
@@ -99,6 +102,11 @@ class TrajectoryPlanner():
         # Read Planning parameters
         # if true, the planner will load a path from a file rather than subscribing to a path topic           
         self.replan_dt = get_ros_param('~replan_dt', 0.1)
+
+        map_file = rospy.get_param("~map_file")
+        with open(map_file, 'rb') as f:
+            self.lanelet_map=pickle.load(f)
+        self.lanelet_map.build_graph(0)
         
         # Read the ILQR parameters file, if empty, use the default parameters
         ilqr_params_file = get_ros_param('~ilqr_params_file', '')
@@ -130,6 +138,7 @@ class TrajectoryPlanner():
         '''
         # Publisher for the planned nominal trajectory for visualization
         self.trajectory_pub = rospy.Publisher(self.traj_topic, PathMsg, queue_size=1)
+        self.path_pub = rospy.Publisher(self.path_topic, PathMsg, queue_size=10)
 
         # Publisher for the control command
         self.control_pub = rospy.Publisher(self.control_topic, ServoMsg, queue_size=1)
@@ -240,17 +249,102 @@ class TrajectoryPlanner():
             rospy.loginfo('Path received!')
         except:
             rospy.logwarn('Invalid path received! Move your robot and retry!')
+
+    def obstacles_in_path(self, pose_x, pose_y):
+        obs_in_path = []
+        obstacles = []
+        for key, val in self.static_obstacle_dict.items():
+            for x,y in zip(pose_x, pose_y):
+                min_x, max_x = min(val[:, 0]), max(val[:, 0])
+                min_y, max_y = min(val[:, 1]), max(val[:, 1])
+
+                # check within an error of 0.25
+                if (min_x-0.1<=x<=max_x+0.1) and ((min_y-0.1<=y<=max_y+0.1)):
+                    idx = np.nonzero(pose_x == x)[0]
+                    obs_in_path.append(idx.item())
+                
+        # make a list of unique positions
+        obs_in_path = set(obs_in_path)
+        obs_in_path = list(obs_in_path)
+        return obs_in_path
+
+    def check_lane(self, pose):
+        vehicle_lane, s_start = self.lanelet_map.get_closest_lanelet(pose, check_psi=False) #update pose if need to make true
+        d_lateral = 0
+        go_left = False
+        go_right = False
+
+        #rospy.loginfo(f"LANE INFO: right lanes are {vehicle_lane.right}, left lanes are {vehicle_lane.left}")
+        if len(vehicle_lane.left) != 0:
+            left_lanelet = self.lanelet_map.get_lanelet(vehicle_lane.left[0])
+            d_lateral, s_neighbor = left_lanelet.distance_to_centerline(pose[:2])
+            rospy.loginfo(f'distance from other lane center {d_lateral}, cetner: ')
+            center = self.lanelet_map.get_reference(left_lanelet, s_start, s_neighbor)
+            #new_pose = pose[0] + d_lateral # how to know if x or y = 0 or 1 and + or -
+            #replace waypoints in ref_path or all at once (= or in)
+            #path_msg_poses[pose] = new_pose
+
+        elif len(vehicle_lane.right) != 0:
+            right_lanelet = self.lanelet_map.get_lanelet(vehicle_lane.right[0])
+            d_lateral, s_neighbor = right_lanelet.distance_to_centerline(pose[:2])
+            rospy.loginfo(f'distance from other lane center {d_lateral}, center: ')
+            center = self.lanelet_map.get_reference(right_lanelet, s_start, s_neighbor)
+            #new_pose = pose[0] + d_lateral # how to know if x or y = 0 or 1 and + or -
+            #replace waypoints in ref path or all at once (= or in)
+            #path_msg_poses[pose] = new_pose
+
+        return center[-1]
+
+    def update_path_msg(self, path_msg, obs_in_path):
+        """
+        """ 
         
+        # check if there are any obsticales in sucession
+        # get the list of waypoints in sucession
+        #obs_in_path = self.group_succeeding_values(obs_in_path)
+
+        for obs in obs_in_path:
+            x_pose = path_msg.poses[obs].pose.position.x
+            y_pose = path_msg.poses[obs].pose.position.y
+            q = [path_msg.poses[obs].pose.orientation.x, path_msg.poses[obs].pose.orientation.y, 
+                path_msg.poses[obs].pose.orientation.z, path_msg.poses[obs].pose.orientation.w]
+            psi = euler_from_quaternion(q)[-1]
+            pose = np.array([x_pose, y_pose, psi])
+            
+            # check what lane you are in from seeing the first object in an obstacle group
+            # that blocks your path
+            center = self.check_lane(pose)
+            # for right now lets just pretend we are on the bottom track ONLY
+            path_msg.poses[obs].pose.position.x = center[0]
+            path_msg.poses[obs].pose.position.y = center[1]
+            path_msg.poses[obs].pose.orientation.x = center[2]
+            path_msg.poses[obs].pose.orientation.y = center[3]
+            path_msg.poses[obs].pose.orientation.z = center[4]
+
+        return path_msg
+
+
 
     def generate_path(self, plan_response):
         path_msg = plan_response.path
+
+       # self.path_pub.publish(path_msg)
         x = []
         y = []
         width_L = []
         width_R = []
         speed_limit = []
         
+        pose_x = np.array([waypoint.pose.position.x for waypoint in path_msg.poses])
+        pose_y = np.array([waypoint.pose.position.y for waypoint in path_msg.poses])
+
+        obs_in_path = self.obstacles_in_path(pose_x=pose_x, pose_y = pose_y)
+        if len(obs_in_path) != 0:
+            path_msg = self.update_path_msg(path_msg, obs_in_path)
+
+        rospy.loginfo(f'{obs_in_path}')
         for waypoint in path_msg.poses:
+
             x.append(waypoint.pose.position.x)
             y.append(waypoint.pose.position.y)
             width_L.append(waypoint.pose.orientation.x)
@@ -260,7 +354,26 @@ class TrajectoryPlanner():
         centerline = np.array([x, y])
         ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
 
+        self.publish_ref_path(plan_response)
+
         return ref_path
+    
+    def publish_ref_path(self, path_response):
+        path_msg = PathMsg()
+        
+        path_msg.header = rospy.Header(frame_id = 'map', stamp = rospy.Time.now())
+        for waypoint in path_response.path.poses:
+            temp = PoseStamped()
+            temp.header = rospy.Header(frame_id = 'map', stamp = rospy.Time.now())
+            temp.pose.position.x = waypoint.pose.position.x
+            temp.pose.position.y = waypoint.pose.position.y
+            temp.pose.orientation.x = waypoint.pose.orientation.x # left width
+            temp.pose.orientation.y = waypoint.pose.orientation.y # right width
+            temp.pose.orientation.z = waypoint.pose.orientation.z # speed limit
+            path_msg.poses.append(temp)
+
+        rospy.loginfo("pub the new ref path")
+        self.path_pub.publish(path_msg)
 
     @staticmethod
     def compute_control(x, x_ref, u_ref, K_closed_loop):
@@ -540,8 +653,15 @@ class TrajectoryPlanner():
                 odom_msg = self.control_state_buffer.readFromRT()
                 x_pos = odom_msg.pose.pose.position.x
                 y_pos = odom_msg.pose.pose.position.y
-                rospy.loginfo(f'x_pos: {x_pos}')
-                rospy.loginfo(f'y_pos: {y_pos}')
+                #rospy.loginfo(f'x_pos: {x_pos}')
+                #rospy.loginfo(f'y_pos: {y_pos}')
+
+                q = [odom_msg.pose.pose.orientation.x, odom_msg.pose.pose.orientation.y, 
+                        odom_msg.pose.pose.orientation.z, odom_msg.pose.pose.orientation.w]
+                # get the heading angle from the quaternion
+                psi = euler_from_quaternion(q)[-1]
+
+                rospy.loginfo(f"orientation {psi}")
 
                 if first is True:
                     self.setup_path(x_pos, y_pos, curr_goal)
@@ -559,11 +679,52 @@ class TrajectoryPlanner():
                   
 
                 if self.path_buffer.new_data_available:
-                    rospy.loginfo('new path...')
+                    #rospy.loginfo('new path...')
 
                     new_path = self.path_buffer.readFromRT()
                     self.planner.update_ref_path(new_path)
+                '''
+                ### edit time lol
+                # Trying to do lanelet stuff
+                if map_file is None:
+                    map_file = rospy.get_param("~map_file")
+                with open(map_file, 'rb') as f:
+                    self.lanelet_map = pickle.load(f)
+                self.lanelet_map.build_graph(0)
 
+                # add reference lane into the list
+                ref_lanelet_list = []
+                
+                # get lateral distance to the lane
+                closest_lanelet, s_start = self.lanelet_map.get_closest_lanelet(pose, check_psi=True)
+                d_lateral, _  = closest_lanelet.distance_to_centerline(pose[:2])
+                ref_lanelet_list.append((closest_lanelet.id, s_start, d_lateral))
+
+                x = odom_msg.pose.pose.position.x
+                y = odom_msg.pose.pose.position.y
+                pose = np.array([x, y, psi])
+
+                # if allow_lane_change:
+                    for left in closest_lanelet.left:
+                        left_lanelet = self.lanelet_map.get_lanelet(left)
+                        d_lateral, s_start  = left_lanelet.distance_to_centerline(pose[:2])
+                        ref_lanelet_list.append((left, s_start, d_lateral))
+                    for right in closest_lanelet.right:
+                        right_lanelet = self.lanelet_map.get_lanelet(right)
+                        d_lateral, s_start  = right_lanelet.distance_to_centerline(pose[:2])
+                        ref_lanelet_list.append((right, s_start, d_lateral))
+                elif d_lateral > 0.05: # if vehicle overleap the left lane boundary
+                    for right in closest_lanelet.right:
+                        right_lanelet = self.lanelet_map.get_lanelet(right)
+                        d_lateral, s_start  = right_lanelet.distance_to_centerline(pose[:2])
+                        ref_lanelet_list.append((right, s_start, d_lateral))
+                elif d_lateral < -0.05: #if vehicle overleap the left lane boundary
+                    for left in closest_lanelet.left:
+                        left_lanelet = self.lanelet_map.get_lanelet(left)
+                        d_lateral, s_start  = left_lanelet.distance_to_centerline(pose[:2])
+                        ref_lanelet_list.append((left, s_start, d_lateral))
+                        
+                '''
                 # this is where the actual replan happens
                 # lab 2: at each time before replanning initalize an empty list : should this happen after the replan conditional? possibly
                 # skip the empty list adn just make it have all the values from the static_obstacle_dict
@@ -575,7 +736,7 @@ class TrajectoryPlanner():
                 t_last_replan = rospy.get_rostime().to_sec()
                     # check if replan is successful and impliment step 3
                 if replan["status"] == 1:
-                    rospy.loginfo('successful replan...')
+                    #rospy.loginfo('successful replan...')
                         
                     t0 = t_last_replan
                     nominal_x = replan["trajectory"]
@@ -587,7 +748,7 @@ class TrajectoryPlanner():
                     new_policy = Policy(nominal_x, nominal_u, K, t0, dt, T)
                     self.policy_buffer.writeFromNonRT(new_policy)
 
-                    rospy.loginfo('Finish planning a new policy...')
+                    #rospy.loginfo('Finish planning a new policy...')
                     self.trajectory_pub.publish(new_policy.to_msg())
 
             else: t_last_replan += 0.01
