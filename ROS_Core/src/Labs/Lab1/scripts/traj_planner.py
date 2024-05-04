@@ -40,6 +40,7 @@ class TrajectoryPlanner():
         # Indicate if the planner is used to generate a new trajectory
         self.update_lock = threading.Lock()
         self.latency = 0.0
+        self.sigma = 0.1  # Standard deviation for Gaussian sum filter
 
         self.goal_locations = {1: [3.15, 0.15], 2: [3.15, 0.47], 
                                3: [5.9, 3.5], 4: [5.6, 3.5], 
@@ -323,7 +324,12 @@ class TrajectoryPlanner():
 
         return path_msg
 
-
+    def gaussian_sum_filter(self, x, y, x_eval):
+        delta_x = x_eval[:, None] - x
+        weights = np.exp(-delta_x * delta_x / (2 * self.sigma * self.sigma)) / (np.sqrt(2 * np.pi) * self.sigma)
+        weights /= np.sum(weights, axis=1, keepdims=True)
+        y_eval = np.dot(weights, y)
+        return y_eval
 
     def generate_path(self, plan_response):
         path_msg = plan_response.path
@@ -350,6 +356,14 @@ class TrajectoryPlanner():
             width_L.append(waypoint.pose.orientation.x)
             width_R.append(waypoint.pose.orientation.y)
             speed_limit.append(waypoint.pose.orientation.z)
+
+        #sum filter from stack
+        x_eval = np.linspace(min(x), max(x), len(x))
+        y_eval = self.gaussian_sum_filter(np.array(x), np.array(y), x_eval)
+
+        for i, waypoint in enumerate(path_msg.poses):
+            waypoint.pose.position.y = y_eval[i]
+            waypoint.pose.position.x = x_eval[i]
                     
         centerline = np.array([x, y])
         ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
