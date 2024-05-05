@@ -8,6 +8,7 @@ import time
 import queue
 import yaml
 import pickle
+from scipy.ndimage import gaussian_filter1d
 
 from utils import RealtimeBuffer, Policy, GeneratePwm
 from ILQR import RefPath
@@ -253,7 +254,7 @@ class TrajectoryPlanner():
 
     def obstacles_in_path(self, pose_x, pose_y):
         obs_in_path = []
-        obstacles = []
+
         for key, val in self.static_obstacle_dict.items():
             for x,y in zip(pose_x, pose_y):
                 min_x, max_x = min(val[:, 0]), max(val[:, 0])
@@ -262,7 +263,8 @@ class TrajectoryPlanner():
                 # check within an error of 0.25
                 if (min_x-0.1<=x<=max_x+0.1) and ((min_y-0.1<=y<=max_y+0.1)):
                     idx = np.nonzero(pose_x == x)[0]
-                    obs_in_path.append(idx.item())
+                    for i in idx:
+                        obs_in_path.append(i)
                 
         # make a list of unique positions
         obs_in_path = set(obs_in_path)
@@ -272,14 +274,11 @@ class TrajectoryPlanner():
     def check_lane(self, pose):
         vehicle_lane, s_start = self.lanelet_map.get_closest_lanelet(pose, check_psi=False) #update pose if need to make true
         d_lateral = 0
-        go_left = False
-        go_right = False
-
+        center = None
         #rospy.loginfo(f"LANE INFO: right lanes are {vehicle_lane.right}, left lanes are {vehicle_lane.left}")
         if len(vehicle_lane.left) != 0:
             left_lanelet = self.lanelet_map.get_lanelet(vehicle_lane.left[0])
             d_lateral, s_neighbor = left_lanelet.distance_to_centerline(pose[:2])
-            rospy.loginfo(f'distance from other lane center {d_lateral}, cetner: ')
             center = self.lanelet_map.get_reference(left_lanelet, s_start, s_neighbor)
             #new_pose = pose[0] + d_lateral # how to know if x or y = 0 or 1 and + or -
             #replace waypoints in ref_path or all at once (= or in)
@@ -288,12 +287,12 @@ class TrajectoryPlanner():
         elif len(vehicle_lane.right) != 0:
             right_lanelet = self.lanelet_map.get_lanelet(vehicle_lane.right[0])
             d_lateral, s_neighbor = right_lanelet.distance_to_centerline(pose[:2])
-            rospy.loginfo(f'distance from other lane center {d_lateral}, center: ')
             center = self.lanelet_map.get_reference(right_lanelet, s_start, s_neighbor)
             #new_pose = pose[0] + d_lateral # how to know if x or y = 0 or 1 and + or -
             #replace waypoints in ref path or all at once (= or in)
             #path_msg_poses[pose] = new_pose
-
+        if center is None:
+            return center
         return center[-1]
 
     def update_path_msg(self, path_msg, obs_in_path):
@@ -315,6 +314,9 @@ class TrajectoryPlanner():
             # check what lane you are in from seeing the first object in an obstacle group
             # that blocks your path
             center = self.check_lane(pose)
+
+            if center is None:
+                return path_msg
             # for right now lets just pretend we are on the bottom track ONLY
             path_msg.poses[obs].pose.position.x = center[0]
             path_msg.poses[obs].pose.position.y = center[1]
@@ -322,14 +324,47 @@ class TrajectoryPlanner():
             path_msg.poses[obs].pose.orientation.y = center[3]
             path_msg.poses[obs].pose.orientation.z = center[4]
 
+        #obs_in_path = np.array(obs_in_path)
+        #diff = np.diff(obs_in_path)
+        #idxs = np.nonzero(diff!=1)[0] +1
+        #idxs = np.insert(idxs, len(idxs), len(obs_in_path))
+
+        # get groups
+        #prev = 0
+        #groups = []
+        #for i in idxs:
+        #    groups.append(obs_in_path[prev:i])
+        #    prev = i
+        
+        #rospy.loginfo(f"groups: {groups}")
+        #for group in groups:
+        #    x = []
+        #    y = []
+        #    if group[0] != 0:
+        #        group = np.insert(group, 0, group[0]-1)
+        #    group = np.insert(group, len(group), group[len(group)-1] +1)
+
+        #    rospy.loginfo(f"group after ends: {group}")
+        #    for idx in group:
+        #        x.append(path_msg.poses[idx].pose.position.x)
+        #        y.append(path_msg.poses[idx].pose.position.y)
+        #    x_eval = np.linspace(min(x), max(x), len(x))
+        #    y_eval = self.gaussian_sum_filter(np.array(x), np.array(y), x_eval)
+
+        #   rospy.loginfo(f"new x/y vals: {x_eval}, {y_eval}")
+
+        #    for i, idx in enumerate(group):
+        #        path_msg.poses[idx].pose.position.x = x_eval[i]
+        #        path_msg.poses[idx].pose.position.y = y_eval[i]
+            
         return path_msg
 
-    def gaussian_sum_filter(self, x, y, x_eval):
-        delta_x = x_eval[:, None] - x
-        weights = np.exp(-delta_x * delta_x / (2 * self.sigma * self.sigma)) / (np.sqrt(2 * np.pi) * self.sigma)
-        weights /= np.sum(weights, axis=1, keepdims=True)
-        y_eval = np.dot(weights, y)
-        return y_eval
+    #def gaussian_sum_filter(self, x, y, x_eval):
+    #    delta_x = x_eval[:, None] - x
+    #    weights = np.exp(-delta_x * delta_x / (2 * self.sigma * self.sigma)) / (np.sqrt(2 * np.pi) * self.sigma)
+    #    weights /= np.sum(weights, axis=1, keepdims=True)
+    #    y_eval = np.dot(weights, y)
+    #    return y_eval
 
     def generate_path(self, plan_response):
         path_msg = plan_response.path
@@ -358,14 +393,14 @@ class TrajectoryPlanner():
             speed_limit.append(waypoint.pose.orientation.z)
 
         #sum filter from stack
-        x_eval = np.linspace(min(x), max(x), len(x))
-        y_eval = self.gaussian_sum_filter(np.array(x), np.array(y), x_eval)
+        x_eval = gaussian_filter1d(x, sigma = 2.5)
+        y_eval = gaussian_filter1d(y, sigma = 2.5)
 
         for i, waypoint in enumerate(path_msg.poses):
             waypoint.pose.position.y = y_eval[i]
             waypoint.pose.position.x = x_eval[i]
                     
-        centerline = np.array([x, y])
+        centerline = np.array([x_eval, y_eval])
         ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
 
         self.publish_ref_path(plan_response)
@@ -675,7 +710,7 @@ class TrajectoryPlanner():
                 # get the heading angle from the quaternion
                 psi = euler_from_quaternion(q)[-1]
 
-                rospy.loginfo(f"orientation {psi}")
+                #rospy.loginfo(f"orientation {psi}")
 
                 if first is True:
                     self.setup_path(x_pos, y_pos, curr_goal)

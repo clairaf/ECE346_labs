@@ -9,7 +9,7 @@ import queue
 
 from utils import RealtimeBuffer, Policy, GeneratePwm
 from ILQR import RefPath
-from ILQR import ILQR
+from ILQR import ILQR_jax as ILQR
 
 from racecar_msgs.msg import ServoMsg
 from racecar_planner.cfg import plannerConfig
@@ -26,6 +26,7 @@ from racecar_routing.srv import Plan, PlanResponse, PlanRequest
 from utils import frs_to_obstacle, frs_to_msg, get_obstacle_vertices, get_ros_param
 from visualization_msgs.msg import MarkerArray
 from racecar_obs_detection.srv import GetFRS, GetFRSResponse
+from geometry_msgs.msg import PoseStamped
 
 class TrajectoryPlanner():
     '''
@@ -35,14 +36,14 @@ class TrajectoryPlanner():
     def __init__(self):
         # Indicate if the planner is used to generate a new trajectory
         self.update_lock = threading.Lock()
-        self.latency = 0.0
+        self.latency = 1.0
 
         self.goal_locations = {1: [3.15, 0.15], 2: [3.15, 0.47], 
                                3: [5.9, 3.5], 4: [5.6, 3.5], 
                                5: [0.15, 3.5], 6: [0.45, 3.5], 
                                7: [3, 1.1], 8: [3, 0.8], 
-                               9: [3, 2.2], 10: [0.75, 2.1], 
-                               11: [0.75, 4.3], 12: [4.6, 4.6]}
+                               9: [3, 2.2], 10: [1.0, 2.1], 
+                               11: [1.0, 4.3], 12: [4.6, 4.6]}
         self.goal_path = [1, 3, 9, 7, 10, 11, 12, 5, 1, 3, 9, 7, 9, 12, 5, 1]
         
         self.read_parameters()
@@ -133,6 +134,7 @@ class TrajectoryPlanner():
 
         # Publisher for the control command
         self.control_pub = rospy.Publisher(self.control_topic, ServoMsg, queue_size=1)
+        self.path_pub = rospy.Publisher(self.path_topic, PathMsg, queue_size=10)
 
         # Publisher for the FRS information for visualization
         self.frs_pub = rospy.Publisher('/vis/FRS', MarkerArray, queue_size = 1)
@@ -210,6 +212,23 @@ class TrajectoryPlanner():
         # inside the controller thread
         self.control_state_buffer.writeFromNonRT(odom_msg)
     
+    def publish_ref_path(self, path_response):
+        path_msg = PathMsg()
+        
+        path_msg.header = rospy.Header(frame_id = 'map', stamp = rospy.Time.now())
+        for waypoint in path_response.path.poses:
+            temp = PoseStamped()
+            temp.header = rospy.Header(frame_id = 'map', stamp = rospy.Time.now())
+            temp.pose.position.x = waypoint.pose.position.x
+            temp.pose.position.y = waypoint.pose.position.y
+            temp.pose.orientation.x = waypoint.pose.orientation.x # left width
+            temp.pose.orientation.y = waypoint.pose.orientation.y # right width
+            temp.pose.orientation.z = waypoint.pose.orientation.z # speed limit
+            path_msg.poses.append(temp)
+
+        rospy.loginfo("pub the new ref path")
+        self.path_pub.publish(path_msg)
+
     def setup_path(self, x_pos, y_pos, goal):
         ''' Returns a list of Reference path objects'''
 
@@ -260,6 +279,7 @@ class TrajectoryPlanner():
         centerline = np.array([x, y])
         ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
 
+        self.publish_ref_path(plan_response)
         return ref_path
 
     @staticmethod
@@ -319,7 +339,7 @@ class TrajectoryPlanner():
                         ])
             x_new = x + dx*dt
             x_new[2] = max(0, x_new[2]) # do not allow negative velocity
-            x_new[2] = min(x_new[2], 1) # do not was to exceed 1 m/s velocity
+            #x_new[2] = min(x_new[2], 1) # do not was to exceed 1 m/s velocity
             x_new[3] = np.mod(x_new[3] + np.pi, 2 * np.pi) - np.pi
             x_new[-1] = u[1]
             return x_new
@@ -498,6 +518,9 @@ class TrajectoryPlanner():
         
         rospy.loginfo('Receding Horizon Planning thread started waiting for ROS service calls...')
         t_last_replan = 0
+        first = True
+        index = 0
+        curr_goal = self.goal_path[index]
         while not rospy.is_shutdown():
             ###############################
             #### TODO: Task 3 #############
@@ -551,7 +574,7 @@ class TrajectoryPlanner():
                     first = False                
 
                 elif ((x_pos > self.goal_locations[curr_goal][0]-0.5) and (x_pos < self.goal_locations[curr_goal][0]+0.5)
-                    ) and ((y_pos > self.goal_locations[curr_goal][1]-0.25) and (y_pos < self.goal_locations[curr_goal][1]+0.25)):
+                    ) and ((y_pos > self.goal_locations[curr_goal][1]-0.5) and (y_pos < self.goal_locations[curr_goal][1]+0.5)):
                     rospy.loginfo("WE ARE GETTING THE NEXT PATH")
 
                     if index < len(self.goal_path):
@@ -589,8 +612,8 @@ class TrajectoryPlanner():
 
                 t_last_replan = rospy.get_rostime().to_sec()
                     # check if replan is successful and impliment step 3
-                if replan["status"] == 0:
-                    rospy.loginfo('successful replan...')
+                if replan["status"] == 1:
+                    #rospy.loginfo('successful replan...')
                         
                     t0 = t_last_replan
                     nominal_x = replan["trajectory"]
@@ -602,7 +625,7 @@ class TrajectoryPlanner():
                     new_policy = Policy(nominal_x, nominal_u, K, t0, dt, T)
                     self.policy_buffer.writeFromNonRT(new_policy)
 
-                    rospy.loginfo('Finish planning a new policy...')
+                    #rospy.loginfo('Finish planning a new policy...')
                     self.trajectory_pub.publish(new_policy.to_msg())
 
             else: t_last_replan += 0.01

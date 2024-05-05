@@ -57,7 +57,7 @@ a_max: 5.0 # maximum acceleration
 a_min: -5.0 # minimum acceleration
 
 # reference velocity
-v_ref: 1 # reference velocity
+v_ref: 0.85 # reference velocity
 ####################################################
 ########## Parameters for ILQR COST ################
 ####################################################
@@ -65,7 +65,8 @@ v_ref: 1 # reference velocity
 ########        State Cost          ############
 
 # Path Offset Cost
-path_weight: 10.0 # weight for the path deviation cost
+path_weight: 12.0 # weight for the path deviation cost
+# prev values: 10.0, 5.0 bad, 12.0 okay 
 
 # Velocity Cost
 vel_weight: 25.0 # weight for the velocity cost
@@ -75,20 +76,20 @@ vel_limit_a: 20.0 # parameter for speed limit cost
 vel_limit_b: 1.0 # parameter for ExpLinear Cost
 
 # Heading Cost
-heading_weight: 1  # weight for the heading cost
+heading_weight: 10  # weight for the heading cost
 
 # Lateral Acceleration Cost
 # We use ExpLinearCost for lateral acceleration cost
-lat_accel_thres: 12.0 # threshold for lateral acceleration cost
-lat_accel_a: 20.0 # parameter for lateral acceleration cost
-lat_accel_b: 5.0 # parameter for ExpLinear Cost
+lat_accel_thres: 15.0 # threshold for lateral acceleration cost
+lat_accel_a: 30.0 # parameter for lateral acceleration cost
+lat_accel_b: 10.0 # parameter for ExpLinear Cost
 
 # Progress Cost
-progress_weight: 0  # weight for the progress cost
+progress_weight: 1  # weight for the progress cost
 
 # Lane Boundary Cost
-lane_boundary_a: 170.0 # parameter for lane boundary cost
-lane_boundary_b: 15.0 # parameter for ExpLinear Cost
+lane_boundary_a: 200.0 # parameter for lane boundary cost
+lane_boundary_b: 25.0 # parameter for ExpLinear Cost
 
 ########        Control Cost          ############
 # those value should not be too small
@@ -96,5 +97,5 @@ ctrl_cost_accel_weight: 1.0
 ctrl_cost_steer_weight: 0.5
 
 ########        Obstacle Cost          ############
-obs_a: 80.0 # parameter for obstacle cost
-obs_b: 20.0 # parameter for ExpLinear Cost
+obs_a: 25.0 # parameter for obstacle cost
+obs_b: 5.0 # parameter for ExpLinear Cost

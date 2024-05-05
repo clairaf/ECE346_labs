@@ -46,7 +46,7 @@ delta_max: 0.35 # maximum steering angle
 delta_min: -0.35 # minimum steering angle
 
 # velocity limits
-v_max: 5.0 # maximum velocity
+v_max: 1.0 # maximum velocity
 v_min: 0.0 # minimum velocity
 
 # turn rate limits

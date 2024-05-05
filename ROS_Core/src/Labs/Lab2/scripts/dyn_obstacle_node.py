@@ -70,7 +70,7 @@ class DynObstacle():
         self.K_y = 0
         self.dx = 0
         self.dy = 0 
-        self.allow_lane_change = False
+        self.allow_lane_change = True
 
         
         # Create a service server to calculate the FRS
